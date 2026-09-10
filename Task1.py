@@ -1,56 +1,133 @@
+
+import os
+import tempfile
 import streamlit as st
-from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 
-st.title("Simple Q&A Chatbot (Ollama)")
-st.write("Ask any question and get an answer from a local Ollama model.")
+load_dotenv()
+api_key = os.getenv("GROQ_API_KEY")
 
-
-# Let user choose which Ollama model to use
-
-model_choice = st.selectbox(
-    "Choose a model:",
-    ["llama3", "mistral", "gemma"]
+# Setup LLM
+llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    api_key=api_key,
+    temperature=0.2
 )
 
-
-# Same prompt template used in earlier tasks
-
-qa_prompt = ChatPromptTemplate.from_messages([
+# Prompt template with context + chat history + question
+rag_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are a helpful assistant. Answer the user's question clearly "
-        "and in simple language."
+        "You are a helpful assistant. Answer using ONLY the context below.\n\n"
+        "Context:\n{context}"
     ),
+    MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{question}")
 ])
 
+st.title("PDF Chatbot using ChatGroq")
 
-# user question
-user_question = st.text_input("Enter your question:")
+# Session state to store chat history
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "retriever" not in st.session_state:
+    st.session_state.retriever = None
 
 
-# displaying the answer
-if st.button("Get Answer"):
+# File uploader (PDF)
 
-    if user_question.strip() == "":
-        st.warning("Please type a question first.")
+
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+
+if uploaded_file is not None and st.session_state.retriever is None:
+
+    try:
+        # Save uploaded file to a temp path so PyPDFLoader can read it
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        tmp_file.write(uploaded_file.read())
+        tmp_path = tmp_file.name
+        tmp_file.close()
+
+        # Load PDF
+        loader = PyPDFLoader(tmp_path)
+        documents = loader.load()
+
+        # Split into chunks
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        chunks = splitter.split_documents(documents)
+
+        # Create embeddings + vector store
+        embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        vectorstore = FAISS.from_documents(chunks, embedding_model)
+
+        # Save retriever in session state
+        st.session_state.retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+        st.success("PDF loaded successfully. You can start asking questions.")
+
+    except Exception as e:
+        # Task 10: handle errors gracefully instead of crashing the app
+        st.error(f"Could not read this PDF. Please try another file. Error: {e}")
+
+# Display previous chat messages
+
+for message in st.session_state.chat_history:
+    if isinstance(message, HumanMessage):
+        with st.chat_message("user"):
+            st.write(message.content)
+    elif isinstance(message, AIMessage):
+        with st.chat_message("assistant"):
+            st.write(message.content)
+
+
+# Chat input box
+
+user_question = st.chat_input("Ask a question about the PDF...")
+
+# Connect RAG chain with UI
+if user_question:
+
+    #  if no PDF has been uploaded yet
+    if st.session_state.retriever is None:
+        st.warning("Please upload a PDF first before asking a question.")
 
     else:
-        with st.spinner("Thinking..."):
+        with st.chat_message("user"):
+            st.write(user_question)
 
-            # Initializing Ollama model
-            llm = ChatOllama(model=model_choice)
+        try:
+            # relevant documents
+            retrieved_docs = st.session_state.retriever.invoke(user_question)
+            context = "\n\n".join([doc.page_content for doc in retrieved_docs])
 
-            # Fill the prompt template
-            formatted_prompt = qa_prompt.invoke({"question": user_question})
+            # prompt with context + chat history + question
+            formatted_prompt = rag_prompt.invoke({
+                "context": context,
+                "chat_history": st.session_state.chat_history,
+                "question": user_question
+            })
 
+            # Generating answer using ChatGroq
             response = llm.invoke(formatted_prompt.messages)
             answer = response.content
 
-        # Display the answer clearly
-        st.subheader("Answer:")
-        st.write(answer)
+            # Saving this turn to chat history
+            st.session_state.chat_history.append(HumanMessage(content=user_question))
+            st.session_state.chat_history.append(AIMessage(content=answer))
 
-        # streamlit run A29-streamlitChatbot.py
+            # Displaying response in chat format
+            with st.chat_message("assistant"):
+                st.write(answer)
+
+        except Exception as e:
+            #  handling errors 
+            st.error(f"Something went wrong while answering. Please try again. Error: {e}")
