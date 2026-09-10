@@ -1,131 +1,68 @@
-
-import os
-import tempfile
 import streamlit as st
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from groq import Groq
 
+# 1. Setup page layout and title
+st.set_page_config(page_title="Groq Chatbot", page_icon="🤖", layout="centered")
+st.title("🤖 Groq AI Chatbot")
 
-api_key = os.getenv("GROQ_API_KEY")
+# 2. Initialize the Groq client using Streamlit secrets
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# Setup LLM
-llm = ChatGroq(
-    model="openai/gpt-oss-20b",
-    api_key=api_key,
-    temperature=0.2
-)
+# 3. Model selection sidebar
+model_options = [
+    "llama-3.3-70b-versatile",
+    "llama3-8b-8192",
+    "mixtral-8x7b-32768"
+]
+selected_model = st.sidebar.selectbox("Choose a model:", model_options)
 
-# Prompt template with context + chat history + question
-rag_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "You are a helpful assistant. Answer using ONLY the context below.\n\n"
-        "Context:\n{context}"
-    ),
-    MessagesPlaceholder(variable_name="chat_history"),
-    ("human", "{question}")
-])
+# 4. Initialize chat history in session state if it doesn't exist
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-st.title("PDF Chatbot using ChatGroq")
+# 5. Display existing chat history from session state
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
 
-# Session state to store chat history
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# 6. Accept user input
+if user_prompt := st.chat_input("What is on your mind?"):
+    # Display user message in chat message container
+    with st.chat_message("user"):
+        st.write(user_prompt)
+    
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
 
-if "retriever" not in st.session_state:
-    st.session_state.retriever = None
-
-
-# File uploader (PDF)
-
-
-uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
-
-if uploaded_file is not None and st.session_state.retriever is None:
-
-    try:
-        # Save uploaded file to a temp path so PyPDFLoader can read it
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        tmp_file.write(uploaded_file.read())
-        tmp_path = tmp_file.name
-        tmp_file.close()
-
-        # Load PDF
-        loader = PyPDFLoader(tmp_path)
-        documents = loader.load()
-
-        # Split into chunks
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-        chunks = splitter.split_documents(documents)
-
-        # Create embeddings + vector store
-        embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        vectorstore = FAISS.from_documents(chunks, embedding_model)
-
-        # Save retriever in session state
-        st.session_state.retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-
-        st.success("PDF loaded successfully. You can start asking questions.")
-
-    except Exception as e:
-        # Task 10: handle errors gracefully instead of crashing the app
-        st.error(f"Could not read this PDF. Please try another file. Error: {e}")
-
-# Display previous chat messages
-
-for message in st.session_state.chat_history:
-    if isinstance(message, HumanMessage):
-        with st.chat_message("user"):
-            st.write(message.content)
-    elif isinstance(message, AIMessage):
-        with st.chat_message("assistant"):
-            st.write(message.content)
-
-
-# Chat input box
-
-user_question = st.chat_input("Ask a question about the PDF...")
-
-# Connect RAG chain with UI
-if user_question:
-
-    #  if no PDF has been uploaded yet
-    if st.session_state.retriever is None:
-        st.warning("Please upload a PDF first before asking a question.")
-
-    else:
-        with st.chat_message("user"):
-            st.write(user_question)
-
+    # Display assistant response container
+    with st.chat_message("assistant"):
+        # Create a placeholder to update the text streaming in real time
+        response_placeholder = st.empty()
+        full_response = ""
+        
         try:
-            # relevant documents
-            retrieved_docs = st.session_state.retriever.invoke(user_question)
-            context = "\n\n".join([doc.page_content for doc in retrieved_docs])
-
-            # prompt with context + chat history + question
-            formatted_prompt = rag_prompt.invoke({
-                "context": context,
-                "chat_history": st.session_state.chat_history,
-                "question": user_question
-            })
-
-            # Generating answer using ChatGroq
-            response = llm.invoke(formatted_prompt.messages)
-            answer = response.content
-
-            # Saving this turn to chat history
-            st.session_state.chat_history.append(HumanMessage(content=user_question))
-            st.session_state.chat_history.append(AIMessage(content=answer))
-
-            # Displaying response in chat format
-            with st.chat_message("assistant"):
-                st.write(answer)
-
+            # Request streaming response from Groq API
+            completion = client.chat.completions.create(
+                model=selected_model,
+                messages=[
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.messages
+                ],
+                stream=True,
+            )
+            
+            # Iterate through the stream and stitch chunks together
+            for chunk in completion:
+                chunk_text = chunk.choices[0].delta.content
+                if chunk_text is not None:
+                    full_response += chunk_text
+                    # Dynamically update the placeholder UI with the cumulative response
+                    response_placeholder.write(full_response)
+                    
         except Exception as e:
-            #  handling errors 
-            st.error(f"Something went wrong while answering. Please try again. Error: {e}")
+            st.error(f"An error occurred: {e}")
+            full_response = "Sorry, I couldn't process that request."
+            response_placeholder.write(full_response)
+
+    # Add complete assistant response to chat history
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
