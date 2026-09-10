@@ -9,11 +9,7 @@ st.title("🤖 Groq AI Chatbot")
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # 3. Model selection sidebar
-model_options = [
-    "llama-3.3-70b-versatile",
-    "llama3-8b-8192",
-    "mixtral-8x7b-32768"
-]
+model_options = ["openai/gpt-oss-20b"]
 selected_model = st.sidebar.selectbox("Choose a model:", model_options)
 
 # 4. Initialize chat history in session state if it doesn't exist
