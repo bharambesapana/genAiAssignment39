@@ -2,7 +2,6 @@
 import os
 import tempfile
 import streamlit as st
-from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -12,7 +11,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 
-load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
 
 # Setup LLM
