@@ -1,34 +1,56 @@
-try:
-    # Read input from user
-    order_amount = float(input("Enter order amount: "))
+import streamlit as st
+from langchain_ollama import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate
 
-    # Apply discount rules
-    if order_amount >= 2000:
-        discount = 15
-    elif order_amount >= 1500:
-        discount = 10
-    elif order_amount >= 1000:
-        discount = 7
+
+st.title("Simple Q&A Chatbot (Ollama)")
+st.write("Ask any question and get an answer from a local Ollama model.")
+
+
+# Let user choose which Ollama model to use
+
+model_choice = st.selectbox(
+    "Choose a model:",
+    ["llama3", "mistral", "gemma"]
+)
+
+
+# Same prompt template used in earlier tasks
+
+qa_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a helpful assistant. Answer the user's question clearly "
+        "and in simple language."
+    ),
+    ("human", "{question}")
+])
+
+
+# user question
+user_question = st.text_input("Enter your question:")
+
+
+# displaying the answer
+if st.button("Get Answer"):
+
+    if user_question.strip() == "":
+        st.warning("Please type a question first.")
+
     else:
-        discount = 0
+        with st.spinner("Thinking..."):
 
-    # Calculate discount amount
-    discount_amount = (order_amount * discount) / 100
+            # Initializing Ollama model
+            llm = ChatOllama(model=model_choice)
 
-    # Final amount after discount
-    final_amount = order_amount - discount_amount
+            # Fill the prompt template
+            formatted_prompt = qa_prompt.invoke({"question": user_question})
 
-    print("Order Amount:", order_amount)
-    print("Discount Applied:", discount, "%")
-    print("Discount Amount:", discount_amount)
-    print("Final Amount:", final_amount)
+            response = llm.invoke(formatted_prompt.messages)
+            answer = response.content
 
-    # Optional: Add tax
-    tax = final_amount * 0.05
-    grand_total = final_amount + tax
+        # Display the answer clearly
+        st.subheader("Answer:")
+        st.write(answer)
 
-    print("Tax (5%):", tax)
-    print("Grand Total:", grand_total)
-
-except ValueError:
-    print("Error: Please enter a valid numeric value.")
+        # streamlit run A29-streamlitChatbot.py
